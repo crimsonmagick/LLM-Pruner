@@ -229,10 +229,15 @@ def main(args):
 
     if args.save_model:
         model.half()
-        torch.save({
-            'model': model, 
-            'tokenizer': tokenizer,
-        }, logger.best_checkpoint_path)
+        # torch.save({
+        #     'model': model,
+        #     'tokenizer': tokenizer,
+        # }, logger.best_checkpoint_path)
+        model.config.hidden_size = model.model.embed_tokens.weight.shape[1]
+        model.config.num_attention_heads = model.model.layers[0].self_attn.num_heads
+        model.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
+        tokenizer.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
+        model.config.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
     
     if args.eval_device != "cpu":
         model.half()

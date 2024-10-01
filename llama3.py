@@ -10,6 +10,8 @@ from typing import Tuple
 
 import torch
 import numpy as np
+from torch.cuda.amp import GradScaler, autocast
+from torch.utils.checkpoint import checkpoint
 from transformers import LlamaTokenizer, GenerationConfig, LlamaConfig, AutoTokenizer, LlamaForCausalLM
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
 
@@ -41,6 +43,9 @@ def main(args):
         args.base_model,
         device_map="auto",
         torch_dtype=torch.float16,
+        max_memory={
+          0: "23.0GB"
+        }
     )
     if args.device != "cpu":
         model.half()
@@ -65,7 +70,7 @@ def main(args):
                 result = tokenizer.decode(generation_output[0])
                 logger.log(result)
     
-        ppl = PPLMetric(model, tokenizer, ['wikitext2', 'ptb'], args.max_seq_len, device=args.eval_device)
+        ppl = PPLMetric(model, tokenizer, ['wikitext2', 'ptb'], args.max_seq_len, device=args.eval_device, batch_size=2)
         logger.log("PPL before pruning: {}".format(ppl))
 
     model.to(args.device)
@@ -125,32 +130,32 @@ def main(args):
         model.zero_grad()
 
         logger.log("Start Pruning")
+        
+        def forward_loss(tokens, token_labels):
+            return model(input_ids=tokens, labels=token_labels).loss
+        
+        scaler = GradScaler()
+        
         for i in range(args.iterative_steps):
 
             if pruner_type in ['taylor']:
-                example_prompts = get_examples('bookcorpus', tokenizer, args.num_examples, seq_len = 64).to(args.device)
+                example_prompts = get_examples('bookcorpus', tokenizer, args.num_examples, seq_len = 64)
                 logger.log("Start Backwarding in iterative steps = {}...".format(i))
-                if args.taylor in ['param_mix', 'param_second']:
-                    for j in range(args.num_examples):
-                        print(j)
-                        batch_input = example_prompts[j].unsqueeze(0)
-                        loss = model(batch_input, labels=batch_input).loss
-                        logger.log("Loss = {}".format(loss))
-                        loss.backward()
-
-                        for module_param in model.parameters():
-                            module_param.grad = module_param.grad * module_param.grad / args.num_examples
-                            if hasattr(module_param, 'acc_grad'):
-                                module_param.acc_grad += module_param.grad
-                            else:
-                                module_param.acc_grad = copy.deepcopy(module_param.grad)
-                        model.zero_grad()
-                        del loss.grad
+                
+                micro_batch_count = 10
+                micro_batch_size = len(example_prompts) // micro_batch_count
+                for j in range(0, len(example_prompts), micro_batch_size):
+                    micro_batch = example_prompts[j:j + micro_batch_size].to(args.device)
+                    with autocast():
+                        loss = checkpoint(forward_loss, micro_batch, micro_batch, use_reentrant=False)
+                    print(f'Cuda memory: {torch.cuda.memory_summary()}')
+                    logger.log(f"Loss for micro-batch {j // micro_batch_size}: {loss}")
+                    scaled_loss = loss / micro_batch_count
+                    scaler.scale(scaled_loss).backward()
                     
-                loss = model(example_prompts, labels=example_prompts).loss
-                logger.log("Loss = {}".format(loss))
-                loss.backward()
-
+                    del micro_batch, loss, scaled_loss
+                    torch.cuda.empty_cache()
+            
             # 1. Consecutive for grouped KV
             # 2. 
             pruner.step()
