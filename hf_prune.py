@@ -91,13 +91,13 @@ def main(args):
         raise NotImplementedError
 
     logger.log("Use {} pruner...".format(pruner_type))
-    
+
     if args.block_wise:
         kwargs = {
             "importance": imp,
             "global_pruning": args.global_pruning,
             "iterative_steps": args.iterative_steps,
-            "ch_sparsity": args.pruning_ratio, 
+            "ch_sparsity": args.pruning_ratio,
             "ignored_layers":[],
             "channel_groups": {
             },
@@ -107,7 +107,7 @@ def main(args):
             "customized_pruners": {
                 LlamaRMSNorm: llama_pruner.hf_rmsnorm_pruner,
             },
-            "root_module_types": None, 
+            "root_module_types": None,
             "root_instances": [model.model.layers[i].self_attn.q_proj for i in range(args.block_attention_layer_start, args.block_attention_layer_end)] +
                               [model.model.layers[i].mlp.gate_proj for i in range(args.block_mlp_layer_start, args.block_mlp_layer_end)]
         }
@@ -142,7 +142,7 @@ def main(args):
                                 module_param.acc_grad = copy.deepcopy(module_param.grad)
                         model.zero_grad()
                         del loss.grad
-                    
+
                 loss = model(example_prompts, labels=example_prompts).loss
                 logger.log("Loss = {}".format(loss))
                 loss.backward()
@@ -151,7 +151,7 @@ def main(args):
 
             after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
             logger.log("After Iter {}/{}, #parameters: {}".format(i+1, args.iterative_steps, after_pruning_parameters))
-        
+
             # modify inferece-related attributes
             for layer in model.model.layers:
                 layer.self_attn.num_heads = layer.self_attn.q_proj.weight.data.shape[0] // layer.self_attn.head_dim
@@ -188,7 +188,7 @@ def main(args):
             **kwargs
         )
         model.zero_grad()
-        
+
         logger.log("Start Pruning")
         for i in range(args.iterative_steps):
 
@@ -213,12 +213,12 @@ def main(args):
         # modify inferece-related attributes
         model.config.hidden_size = model.model.embed_tokens.weight.shape[1]
         model.zero_grad()
-        
+
         del pruner
-            
+
     elif args.layer_wise:
         model.model.layers = model.model.layers[:args.layer]
-        after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        after_pruning_parameters = sum(p.numel() for p in model.paramete1Grs() if p.requires_grad)
 
     else:
         raise NotImplementedError
@@ -229,15 +229,16 @@ def main(args):
 
     if args.save_model:
         model.half()
-        # torch.save({
-        #     'model': model,
-        #     'tokenizer': tokenizer,
-        # }, logger.best_checkpoint_path)
-        model.config.hidden_size = model.model.embed_tokens.weight.shape[1]
-        model.config.num_attention_heads = model.model.layers[0].self_attn.num_heads
-        model.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
-        tokenizer.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
-        model.config.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
+        torch.save({
+            'model': model,
+            'tokenizer': tokenizer,
+        }, logger.best_checkpoint_path)
+        # model.config.hidden_size = model.model.embed_tokens.weight.shape[1]
+        # model.config.num_attention_heads = model.model.layers[0].self_attn.num_heads
+        # # model.config.intermediate_size = model.model.layers[0].mlp.up_proj.weight.shape[1]
+        # model.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
+        # tokenizer.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
+        # model.config.save_pretrained(f"{logger.best_checkpoint_path}/pruned")
     
     if args.eval_device != "cpu":
         model.half()
