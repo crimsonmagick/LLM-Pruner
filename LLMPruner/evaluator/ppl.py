@@ -15,19 +15,30 @@ def PPLMetric(model, tokenizer, datasets, seq_len=128, batch_size = 4, device="c
 
 @torch.no_grad()
 def llama_eval(model, test_lodaer, device):
-    nlls = []
+    # nlls = []
     n_samples = 0
+    total_loss = 0.0
+    total_tokens = 0
     for batch in tqdm(test_lodaer):
         batch = batch.to(device)
         output = model(batch)
         lm_logits = output.logits
+        del output
     
         shift_logits = lm_logits[:, :-1, :].contiguous()
         shift_labels = batch[:, 1:].contiguous()
+        del batch, lm_logits
+        torch.cuda.empty_cache()
         
         loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
         loss = loss_fct(shift_logits.reshape(-1, shift_logits.size(-1)), shift_labels.view(-1))
-        nlls.append(loss)
+        
+        # nlls.append(loss)
+        total_loss += loss.sum().item()
+        total_tokens += shift_labels.numel()
+        
+        del shift_logits, shift_labels, loss
+        torch.cuda.empty_cache()
     #print(torch.cat(nlls, dim=-1).mean())
-    ppl = np.exp(torch.cat(nlls, dim=-1).mean().item())
+    ppl = np.exp(total_loss / total_tokens)
     return ppl.item()
